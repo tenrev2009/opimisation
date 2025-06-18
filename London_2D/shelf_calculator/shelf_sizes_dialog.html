@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>London_2D</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    h2 {
+      margin-bottom: 10px;
+    }
+    label {
+      display: block;
+      margin: 4px 0;
+    }
+    button {
+      margin-top: 15px;
+      padding: 5px 15px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h2 id="title">Sélectionnez les longueurs d'étagère</h2>
+
+  <form id="form">
+    <label><input type="checkbox" value="100.5" checked> 100.5 cm</label>
+    <label><input type="checkbox" value="90" checked> 90 cm</label>
+    <label><input type="checkbox" value="75" checked> 75 cm</label>
+    <label><input type="checkbox" value="50" checked> 50 cm</label>
+
+    <button type="button" id="validateBtn">Valider</button>
+  </form>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      if (window.sketchup && window.sketchup.set_labels) {
+        window.sketchup.set_labels();
+      }
+    });
+
+    function submitSizes() {
+      const boxes = document.querySelectorAll('input[type="checkbox"]');
+      const selected = Array.from(boxes)
+        .filter(box => box.checked)
+        .map(box => box.value)
+        .join(',');
+      if (window.sketchup && window.sketchup.on_submit) {
+        window.sketchup.on_submit(selected);
+      }
+    }
+
+    document.getElementById("validateBtn").addEventListener("click", submitSizes);
+  </script>
+</body>
+</html>
+
+

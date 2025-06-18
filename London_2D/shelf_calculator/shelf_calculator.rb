@@ -1,0 +1,298 @@
+require 'sketchup.rb'
+
+module ShelfCalculator
+  ALL_SHELF_SIZES = [100.5, 90, 75, 50].freeze
+  PANEL_THICKNESS = 3.3.cm
+
+  class ShelfOptimizer
+    def self.calculate_shelves(usable_length_cm, shelf_sizes)
+      best_solution = {
+        shelves: [],
+        total_length: 0,
+        remaining_length: Float::INFINITY
+      }
+      shelf_sizes = shelf_sizes.compact.uniq.sort.reverse
+      try_combinations(usable_length_cm, shelf_sizes, [], 0, best_solution, usable_length_cm)
+      best_solution
+    end
+
+    def self.try_combinations(remaining, shelf_sizes, current_shelves, start_index, best_solution, total_length)
+      if remaining >= 0 && !current_shelves.empty?
+        total_shelf_length = current_shelves.sum { |shelf| shelf[:length] * shelf[:count] }
+        actual_remaining = total_length - total_shelf_length
+
+        if actual_remaining >= 0 && actual_remaining < best_solution[:remaining_length]
+          best_solution[:shelves] = current_shelves.dup
+          best_solution[:total_length] = total_shelf_length
+          best_solution[:remaining_length] = actual_remaining
+        end
+      end
+
+      shelf_sizes.each_with_index do |size, i|
+        next if i < start_index
+        next if size > remaining
+
+        max_count = (remaining / size).floor
+        max_count.downto(1) do |count|
+          try_combinations(
+            remaining - (size * count),
+            shelf_sizes,
+            current_shelves + [{ length: size, count: count }],
+            i + 1,
+            best_solution,
+            total_length
+          )
+        end
+      end
+    end
+  end
+
+  class ShelfCalculatorTool
+    def activate
+      @step = 0
+      @first_point = nil
+      @second_point = nil
+      @reverse_side = false
+      @solution = nil
+      @depth_cm = nil
+      @height_cm = nil
+      @shelves_per_column = nil
+      @preview_ip = Sketchup::InputPoint.new
+      Sketchup.status_text = "Cliquez pour placer le point de départ"
+    end
+
+    def onMouseMove(flags, x, y, view)
+      @preview_ip.pick(view, x, y)
+      view.invalidate
+    end
+
+    def draw(view)
+      @preview_ip.draw(view) if @preview_ip.valid?
+      return unless @step == 2 && @first_point && @second_point && @solution
+
+      direction = @second_point - @first_point
+      xaxis = direction.normalize
+      zaxis = Z_AXIS
+      yaxis = zaxis * xaxis
+      yaxis.reverse! if @reverse_side
+      zaxis = xaxis * yaxis
+      t = Geom::Transformation.axes(@first_point, xaxis, yaxis, zaxis)
+
+      mat_color = Sketchup::Color.new(194, 149, 107, 180)
+      view.drawing_color = mat_color
+
+      origin = ORIGIN
+      pos_x = PANEL_THICKNESS
+
+      faces = []
+
+      # Montant gauche
+      faces << [
+        origin,
+        origin.offset(X_AXIS, PANEL_THICKNESS),
+        origin.offset(X_AXIS, PANEL_THICKNESS).offset(Y_AXIS, @depth_cm.cm),
+        origin.offset(Y_AXIS, @depth_cm.cm)
+      ]
+
+      # Tablettes
+      @solution[:shelves].each do |shelf|
+        shelf[:count].times do
+          len = shelf[:length].cm
+          faces << [
+            origin.offset(X_AXIS, pos_x),
+            origin.offset(X_AXIS, pos_x + len),
+            origin.offset(X_AXIS, pos_x + len).offset(Y_AXIS, @depth_cm.cm),
+            origin.offset(X_AXIS, pos_x).offset(Y_AXIS, @depth_cm.cm)
+          ]
+          pos_x += len
+        end
+      end
+
+      # Montant droit
+      faces << [
+        origin.offset(X_AXIS, pos_x),
+        origin.offset(X_AXIS, pos_x + PANEL_THICKNESS),
+        origin.offset(X_AXIS, pos_x + PANEL_THICKNESS).offset(Y_AXIS, @depth_cm.cm),
+        origin.offset(X_AXIS, pos_x).offset(Y_AXIS, @depth_cm.cm)
+      ]
+
+      faces.each do |pts|
+        view.draw(GL_POLYGON, *pts.map { |pt| pt.transform(t) })
+      end
+    end
+
+    def onKeyDown(key, repeat, flags, view)
+      if key == 9 && @step == 2
+        @reverse_side = !@reverse_side
+        view.invalidate
+      end
+    end
+
+    def onLButtonDown(flags, x, y, view)
+      @preview_ip.pick(view, x, y)
+      return unless @preview_ip.valid?
+
+      case @step
+      when 0
+        @first_point = @preview_ip.position
+        @step = 1
+        Sketchup.status_text = "Cliquez pour placer le point d'arrivée"
+      when 1
+        @second_point = @preview_ip.position
+        length_cm = (@second_point - @first_point).length.to_cm.round(2)
+        return if length_cm < 1
+
+        prompts = ["Profondeur (cm)", "Hauteur (cm)", "Nb tablettes verticales"]
+        defaults = ["30", "180", "5"]
+        input = UI.inputbox(prompts, defaults, "Paramètres")
+        return unless input
+
+        @depth_cm = input[0].to_f
+        @height_cm = input[1].to_f
+        @shelves_per_column = input[2].to_i
+
+        open_html_dialog(length_cm)
+      when 2
+        create_component
+      end
+    end
+
+    def open_html_dialog(length_cm)
+      html_path = File.join(__dir__, "shelf_sizes_dialog.html")
+      dlg = UI::HtmlDialog.new(
+        dialog_title: "Choix des longueurs d'étagère",
+        preferences_key: "shelf_sizes_dialog",
+        scrollable: true,
+        resizable: false,
+        width: 400,
+        height: 300,
+        style: UI::HtmlDialog::STYLE_DIALOG
+      )
+
+      dlg.set_file(html_path)
+
+      dlg.add_action_callback("on_submit") do |_, selected_sizes|
+        tailles = selected_sizes.split(',').map(&:to_f)
+        if tailles.empty?
+          UI.messagebox("Aucune taille sélectionnée.")
+          return
+        end
+
+        utile = length_cm - 2 * (PANEL_THICKNESS / 1.cm)
+        @solution = ShelfOptimizer.calculate_shelves(utile, tailles)
+        @step = 2
+        Sketchup.status_text = "Aperçu affiché. Tab pour inverser, clic pour valider."
+        Sketchup.active_model.active_view.invalidate
+        dlg.close
+      end
+
+      dlg.show
+    end
+
+    def create_component
+      return unless @first_point && @second_point && @solution
+
+      direction = @second_point - @first_point
+      xaxis = direction.normalize
+      zaxis = Z_AXIS
+      yaxis = zaxis * xaxis
+      yaxis.reverse! if @reverse_side
+      zaxis = xaxis * yaxis
+      t = Geom::Transformation.axes(@first_point, xaxis, yaxis, zaxis)
+
+      model = Sketchup.active_model
+      model.start_operation("Créer étagères", true)
+
+      definition = model.definitions.add("London_2D")
+      group = definition.entities.add_group
+      entities = group.entities
+      origin = ORIGIN
+      pos_x = PANEL_THICKNESS
+
+      mat = model.materials["Bois clair"] || model.materials.add("Bois clair")
+      mat.color = Sketchup::Color.new(194, 149, 107)
+
+      # Montant gauche
+      pts = [
+        origin,
+        origin.offset(X_AXIS, PANEL_THICKNESS),
+        origin.offset(X_AXIS, PANEL_THICKNESS).offset(Y_AXIS, @depth_cm.cm),
+        origin.offset(Y_AXIS, @depth_cm.cm)
+      ]
+      face = entities.add_face(pts)
+      face.material = face.back_material = mat
+
+      # Tablettes
+      @solution[:shelves].each do |shelf|
+        shelf[:count].times do
+          len = shelf[:length].cm
+          pts = [
+            origin.offset(X_AXIS, pos_x),
+            origin.offset(X_AXIS, pos_x + len),
+            origin.offset(X_AXIS, pos_x + len).offset(Y_AXIS, @depth_cm.cm),
+            origin.offset(X_AXIS, pos_x).offset(Y_AXIS, @depth_cm.cm)
+          ]
+          face = entities.add_face(pts)
+          face.material = face.back_material = mat
+          pos_x += len
+        end
+      end
+
+      # Montant droit
+      pts = [
+        origin.offset(X_AXIS, pos_x),
+        origin.offset(X_AXIS, pos_x + PANEL_THICKNESS),
+        origin.offset(X_AXIS, pos_x + PANEL_THICKNESS).offset(Y_AXIS, @depth_cm.cm),
+        origin.offset(X_AXIS, pos_x).offset(Y_AXIS, @depth_cm.cm)
+      ]
+      face = entities.add_face(pts)
+      face.material = face.back_material = mat
+
+      instance = model.active_entities.add_instance(definition, t)
+      instance.name = "London_2D_#{model.entities.grep(Sketchup::ComponentInstance).count}"
+
+      instance.set_attribute("London_2D", "longueur_totale_cm", direction.length.to_cm.round(2))
+      instance.set_attribute("London_2D", "profondeur_cm", @depth_cm.round(2))
+      instance.set_attribute("London_2D", "hauteur_cm", @height_cm.round(2))
+      instance.set_attribute("London_2D", "nb_tablettes_hauteur", @shelves_per_column)
+
+      @solution[:shelves].each do |shelf|
+        key = "etagere_#{shelf[:length].to_i}_cm"
+        instance.set_attribute("London_2D", key, shelf[:count])
+      end
+
+      model.commit_operation
+      reset_tool
+    end
+
+    def reset_tool
+      @step = 0
+      @first_point = nil
+      @second_point = nil
+      @reverse_side = false
+      @solution = nil
+      Sketchup.status_text = "Cliquez pour placer le point de départ"
+    end
+  end
+
+  unless file_loaded?(__FILE__)
+    icon_path = File.join(__dir__, "icons", "london_2d.png")
+
+    toolbar = UI::Toolbar.new("London_2D")
+    cmd = UI::Command.new("London_2D") {
+      Sketchup.active_model.select_tool(ShelfCalculator::ShelfCalculatorTool.new)
+    }
+    cmd.tooltip = "London_2D"
+    cmd.status_bar_text = "Créer des étagères London_2D"
+    cmd.large_icon = icon_path
+    cmd.small_icon = icon_path
+    toolbar.add_item(cmd)
+    toolbar.restore
+
+    UI.menu("Plugins").add_item("London_2D") {
+      Sketchup.active_model.select_tool(ShelfCalculator::ShelfCalculatorTool.new)
+    }
+
+    file_loaded(__FILE__)
+  end
+end

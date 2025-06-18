@@ -1,0 +1,222 @@
+require 'sketchup.rb'
+
+module London2D
+  module Dynamic3D
+
+    DICT = "London_2D"
+    SHELF_ATTRS = {
+      100 => "etagere_100_cm",
+      90  => "etagere_90_cm",
+      75  => "etagere_75_cm",
+      50  => "etagere_50_cm"
+    }
+
+    # -------------------------------------------------------------------
+    # Outil interactif de placement du composant 3D entre 2 points
+    # -------------------------------------------------------------------
+    class ComponentPlacementTool
+      def initialize(definition, point1, shelf_counts, nb_tablette, hauteur_pouces)
+        @definition     = definition
+        @point1         = point1
+        @shelf_counts   = shelf_counts
+        @nb_tablette    = nb_tablette
+        @hauteur_pouces = hauteur_pouces
+
+        @ip2            = Sketchup::InputPoint.new
+        @final_pt2      = nil
+        @view           = Sketchup.active_model.active_view
+      end
+
+      def activate
+        UI.set_status_text(
+          "Déplacez la souris pour snap aux points remarquables, puis cliquez pour valider Point 2.",
+          SB_PROMPT
+        )
+        @view.invalidate
+      end
+
+      def deactivate(view)
+        view.invalidate
+        UI.set_status_text("", SB_PROMPT)
+      end
+
+      # Mise à jour de la prévisualisation
+      def onMouseMove(flags, x, y, view)
+        @ip2.pick(view, x, y)
+        view.invalidate
+      end
+
+      # Dessin du preview : P1, P2 provisoire, et ligne
+      def draw(view)
+        # Point 1 fixe (rouge)
+        view.drawing_color = 'red'
+        view.line_width    = 4
+        view.draw_points(@point1, 10, 1)
+
+        # Point 2 provisoire (vert) et ligne (bleu)
+        if @ip2.valid?
+          view.drawing_color = 'green'
+          view.line_width    = 4
+          view.draw_points(@ip2.position, 8, 1)
+
+          view.drawing_color = 'blue'
+          view.line_width    = 2
+          view.draw_lines(@point1, @ip2.position)
+        end
+      end
+
+      # Validation du second point
+      def onLButtonDown(flags, x, y, view)
+        if @ip2.valid?
+          @final_pt2 = @ip2.position
+          place_and_finish
+        else
+          UI.messagebox(
+            "Veuillez cliquer sur un point remarquable (extrémité, milieu, intersection).",
+            MB_OK
+          )
+        end
+      end
+
+      private
+
+      def place_and_finish
+        model = Sketchup.active_model
+        model.start_operation("Insérer 3D dynamique", true)
+
+        # Calcul de la transformation axes
+        vec   = @point1.vector_to(@final_pt2).normalize
+        xaxis = vec
+        zaxis = Z_AXIS
+        yaxis = zaxis * xaxis
+        zaxis = xaxis * yaxis
+        transform = Geom::Transformation.axes(@point1, xaxis, yaxis, zaxis)
+
+        # Insertion du composant 3D principal
+        comp3d = model.active_entities.add_instance(@definition, transform)
+
+        # Injection des attributs dynamiques DANS LE COMPOSANT PARENT (comp3d)
+        # C'est le composant parent qui est responsable de lire ces attributs
+        # et de gérer la génération/configuration de ses propres sous-composants.
+        da = "dynamic_attributes"
+        comp3d.set_attribute(da, "nb_100",     @shelf_counts[100])
+        comp3d.set_attribute(da, "nb_90",      @shelf_counts[90])
+        comp3d.set_attribute(da, "nb_75",      @shelf_counts[75])
+        comp3d.set_attribute(da, "nb_50",      @shelf_counts[50])
+        comp3d.set_attribute(da, "nb_tablette",@nb_tablette)
+        comp3d.set_attribute(da, "hauteur",    @hauteur_pouces)
+
+        # Mise à jour automatique du Composant Dynamique parent
+        # Cette ligne est importante pour le composant principal lui-même
+        if defined?(Sketchup::DynamicComponents::Tools)
+          Sketchup::DynamicComponents::Tools.update_attributes(comp3d)
+        end
+        comp3d.dynamic_attributes_updated if comp3d.respond_to?(:dynamic_attributes_updated)
+
+        model.commit_operation # Valide l'opération avant de tenter le redessin global
+        model.active_view.refresh # Rafraîchit la vue, utile mais ne remplace pas le DC redraw
+
+        UI.messagebox("Insertion 3D terminée et composant mis à jour.", MB_OK)
+
+        # *** LIGNE CLÉ DE LA NOUVELLE SOLUTION : Décaler le redessin ***
+        # Cela permet à SketchUp de terminer l'insertion et la consolidation de l'opération
+        # avant que le rafraîchissement des DCs ne soit demandé.
+        if defined?(Sketchup::DynamicComponents::Tools)
+          UI.start_timer(0.1, false) do # 0.1 secondes de délai (ou même 0.01 suffit parfois), non répétitif
+            Sketchup::DynamicComponents::Tools.redraw_all_d_c_instances
+          end
+        end
+
+        Sketchup.active_model.tools.pop_tool
+      end
+    end
+
+
+    # -------------------------------------------------------------------
+    # Point d'entrée : initialise et lance ComponentPlacementTool
+    # -------------------------------------------------------------------
+    def self.inject_dynamic_3d
+      model = Sketchup.active_model
+      sel   = model.selection.grep(Sketchup::ComponentInstance)
+                  .select { |i| i.get_attribute(DICT, "longueur_totale_cm") }
+      unless sel.any?
+        UI.messagebox("Sélectionnez un composant London_2D.", MB_OK)
+        return
+      end
+
+      inst = sel.first
+      skp3d_path = File.join(__dir__, "london_3d.skp")
+      unless File.exist?(skp3d_path)
+        UI.messagebox("Fichier london_3d.skp introuvable.", MB_OK)
+        return
+      end
+      definition3d = model.definitions.load(skp3d_path)
+
+      # Point 1 : origine du composant 2D
+      origin = inst.transformation.origin
+
+      # Lecture des attributs 2D
+      counts = {}
+      SHELF_ATTRS.each { |k, att| counts[k] = inst.get_attribute(DICT, att).to_i }
+      nb_tab  = inst.get_attribute(DICT, "nb_tablettes_hauteur").to_i
+      haut_cm = inst.get_attribute(DICT, "hauteur_cm").to_f
+      haut_in = (haut_cm / 2.54).round(2)
+
+      # Lance l’outil interactif
+      tool = ComponentPlacementTool.new(definition3d, origin, counts, nb_tab, haut_in)
+      model.tools.push_tool(tool)
+    end
+
+
+    # -------------------------------------------------------------------
+    # Mise à jour des enfants dynamiques
+    # -> Cette fonction est commentée/supprimée car on part de l'hypothèse
+    #    que les enfants héritent leurs attributs du parent et sont gérés
+    #    par le script OnRedraw du parent.
+    # -------------------------------------------------------------------
+    # def self.update_children_dynamic(comp3d, shelf_counts, nb_tablette, hauteur_pouces)
+    #   comp3d.definition.entities.grep(Sketchup::ComponentInstance).each do |child|
+    #     next unless child.attribute_dictionaries&.key?("dynamic_attributes")
+    #     da = "dynamic_attributes"
+    #     child.set_attribute(da, "nb_100",     shelf_counts[100])
+    #     child.set_attribute(da, "nb_90",      shelf_counts[90])
+    #     child.set_attribute(da, "nb_75",      shelf_counts[75])
+    #     child.set_attribute(da, "nb_50",      shelf_counts[50])
+    #     child.set_attribute(da, "nb_tablette",nb_tablette)
+    #     child.set_attribute(da, "hauteur",    hauteur_pouces)
+    #     if defined?(Sketchup::DynamicComponents::Tools)
+    #       Sketchup::DynamicComponents::Tools.update_attributes(child)
+    #     end
+    #     child.dynamic_attributes_updated if child.respond_to?(:dynamic_attributes_updated)
+    #   end
+    # end
+
+
+    # -------------------------------------------------------------------
+    # Intégration dans l’UI : toolbar + menu Plugins
+    # -------------------------------------------------------------------
+    unless file_loaded?(__FILE__)
+      icon = File.join(__dir__, "icons", "london_3d.png")
+
+      cmd = UI::Command.new("Générer module 3D dynamique") { inject_dynamic_3d }
+      cmd.tooltip         = "Place 3D entre Point 1 et Point 2"
+      cmd.status_bar_text = "Outil placement 3D London_2D"
+      cmd.large_icon      = icon
+      cmd.small_icon      = icon
+
+      toolbar = UI.toolbar("London_2D") || UI::Toolbar.new("London_2D")
+      toolbar.add_item(cmd)
+      toolbar.restore
+
+      UI.menu("Plugins")
+        .add_submenu("London_2D")
+        .add_item("Générer module 3D dynamique") { inject_dynamic_3d }
+
+      file_loaded(__FILE__)
+    end
+
+  end
+end
+
+
+
