@@ -1,0 +1,120 @@
+# --- Chargement des dépendances ---
+require 'sketchup.rb'
+
+begin
+  require 'sketchup-dynamic-components/ruby/dcfunctions.rb'
+rescue LoadError
+  UI.messagebox("L'extension 'Composants Dynamiques' est requise. Veuillez l'activer depuis le Gestionnaire d'extensions.")
+end
+
+# --- Définition des modules ---
+module London2D
+end
+
+module London2D::BookInserter
+
+  # --- Constantes ---
+  PLUGIN_DIR = File.dirname(__FILE__)
+  PATH_TO_RESOURCES = File.join(PLUGIN_DIR, 'icons')
+  PATH_TO_COMPONENTS = File.join(PLUGIN_DIR, 'components')
+  PATH_TO_BOOK_BLOCK = File.join(PATH_TO_COMPONENTS, 'book_block.skp')
+
+  # --- L'Observateur "One-Shot" ---
+  # Cet observateur est conçu pour une seule utilisation, puis il se retire.
+  class BookInserterObserver < Sketchup::EntitiesObserver
+    
+    # On lui passe la définition à surveiller lors de sa création.
+    def initialize(definition_to_watch)
+      @definition_to_watch = definition_to_watch
+      puts "Nouvel observateur créé, surveille : #{@definition_to_watch.name}"
+    end
+
+    def onElementAdded(entities, entity)
+      # On vérifie si l'élément ajouté correspond à celui qu'on surveille.
+      if entity.is_a?(Sketchup::ComponentInstance) && entity.definition == @definition_to_watch
+        
+        # On a trouvé notre composant ! On se retire immédiatement pour ne pas interférer plus tard.
+        Sketchup.active_model.entities.remove_observer(self)
+        puts "Observateur a trouvé sa cible et s'est retiré."
+
+        # On utilise le timer pour laisser à SketchUp le temps de finaliser le placement.
+        UI.start_timer(0, false) do
+          puts "Timer déclenché pour la mise à jour de #{entity}"
+          update_component_and_children(entity)
+        end
+      end
+    end
+
+    private
+
+    def update_component_and_children(instance)
+      model = instance.model
+      model.start_operation('Mettre à Jour le Bloc de Livres', true)
+      
+      begin
+        redraw_recursively(instance)
+      rescue => e
+        puts "ERREUR lors de la mise à jour : #{e.message}\n#{e.backtrace.join("\n")}"
+        model.abort_operation
+      else
+        model.commit_operation
+        puts "Mise à jour terminée avec succès."
+      end
+    end
+    
+    def redraw_recursively(instance)
+      return unless instance.is_a?(Sketchup::ComponentInstance)
+      
+      # Mise à jour de l'instance actuelle.
+      if defined?($dc_functions) && instance.attribute_dictionary('dynamic_attributes')
+        $dc_functions.redraw(instance)
+      end
+      
+      # Appel récursif sur les enfants.
+      instance.definition.entities.each do |child|
+        redraw_recursively(child) if child.is_a?(Sketchup::ComponentInstance)
+      end
+    end
+  end
+
+  # --- Méthodes du module ---
+  class << self
+    def place_book_block
+      model = Sketchup.active_model
+      
+      # 1. On charge la définition à la volée.
+      begin
+        book_definition = model.definitions.load(PATH_TO_BOOK_BLOCK)
+      rescue => e
+        UI.messagebox("Impossible de charger le fichier composant :\n#{e.message}")
+        return
+      end
+      
+      # 2. On crée et attache notre observateur "one-shot".
+      observer = BookInserterObserver.new(book_definition)
+      model.entities.add_observer(observer)
+      
+      # 3. On lance l'outil de placement.
+      model.place_component(book_definition, true)
+    end
+  end
+
+  # --- Création de l'interface (une seule fois) ---
+  unless file_loaded?(__FILE__)
+    cmd_place_book = UI::Command.new("Bloc de livres") { self.place_book_block }
+    cmd_place_book.small_icon = File.join(PATH_TO_RESOURCES, "london_books.png")
+    cmd_place_book.large_icon = File.join(PATH_TO_RESOURCES, "london_books.png")
+    cmd_place_book.tooltip = "Placer un bloc de livres"
+    cmd_place_book.status_bar_text = "Cliquez pour placer le bloc de livres."
+    cmd_place_book.menu_text = "Placer un bloc de livres"
+    
+    UI.menu("Plugins").add_item(cmd_place_book)
+    
+    toolbar = UI::Toolbar.new("London_2D")
+    toolbar.add_item(cmd_place_book)
+    toolbar.restore
+    
+    file_loaded(__FILE__)
+  end
+
+end
