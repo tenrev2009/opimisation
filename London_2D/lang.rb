@@ -16,6 +16,7 @@ module London2D
       longueur_reelle:      "Longueur réelle utilisée (cm)",
       espace_restant:       "Espace restant (cm)",
       profondeur:           "Profondeur (cm)",
+
       nom:                  "Nom",
       books_per_meter:      "Nombre de livres par mètre linéaire :",
       capacity_title:       "Estimation de capacité",
@@ -51,6 +52,7 @@ module London2D
       longueur_reelle:      "Used shelf length (cm)",
       espace_restant:       "Remaining space (cm)",
       profondeur:           "Depth (cm)",
+
       nom:                  "Name",
       books_per_meter:      "Number of books per linear meter:",
       capacity_title:       "Capacity estimation",
@@ -73,7 +75,9 @@ module London2D
     }
   }
 
+
   def self.t(key)
     TEXTS[LANG][key] || "!!#{key}!!"
   end
 end
+
