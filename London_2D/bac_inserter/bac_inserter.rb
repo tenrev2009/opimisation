@@ -1,9 +1,10 @@
-# --- bac_inserter.rb avec Overlay, Snapping, et MAJ Ciblée sur l'Enfant ---
+# --- bac_inserter.rb avec Aperçu Fantôme, Clonage d'Attributs, et MAJ Parent ---
 require 'sketchup.rb'
 
 begin
   require 'sketchup-dynamic-components/ruby/dcfunctions.rb'
 rescue LoadError
+  # UI.messagebox("L'extension 'Composants Dynamiques' est requise.")
 end
 
 module London2D
@@ -12,119 +13,131 @@ end
 module London2D::BacInserter
 
   PLUGIN_DIR = File.dirname(__FILE__)
-  # Assumant que bac_inserter.rb est dans London_2D/bac_inserter/
-  # et que icons/ et components/ sont DANS CE SOUS-DOSSIER
   PATH_TO_RESOURCES = File.join(PLUGIN_DIR, 'icons')
   PATH_TO_COMPONENTS = File.join(PLUGIN_DIR, 'components')
-  PATH_TO_BAC_COMPONENT = File.join(PATH_TO_COMPONENTS, '04-BACS.skp') # VÉRIFIEZ CECI
+  PATH_TO_BAC_COMPONENT = File.join(PATH_TO_COMPONENTS, '04-BACS.skp') # VÉRIFIEZ
 
-  class CotationOverlay < Sketchup::Overlay
+  class BacPlacerTool
+    
     SNAP_INCREMENT = 2.5.cm 
-    AXIS_LINE_LENGTH = 50.cm
-    NUMBER_OF_COTATIONS_TO_SHOW = 2
-
-    def initialize(tool_instance)
-      overlay_id = "com.london2d.bacinserter.cotationoverlay.#{Time.now.to_f}"
-      overlay_name = "Cotations Bac Inserter"
-      super(overlay_id, overlay_name)
-      @tool = tool_instance
-    end
-
-    def draw(view)
-      return unless @tool.highlighted_component && @tool.parent_origin && @tool.parent_z_axis
-      view.drawing_color = "Blue"
-      view.line_width = 3; view.line_stipple = ""
-      pt1 = @tool.parent_origin.offset(@tool.parent_z_axis.reverse, AXIS_LINE_LENGTH)
-      pt2 = @tool.parent_origin.offset(@tool.parent_z_axis, AXIS_LINE_LENGTH)
-      view.draw_line(pt1, pt2)
-      if @tool.snapped_insertion_point
-        view.drawing_color = "Red"; view.line_width = 3
-        view.draw_points(@tool.snapped_insertion_point, 12, 4, "Red")
-        view.drawing_color = "Black"
-        text_offset = view.camera.xaxis * 3.cm
-        (-NUMBER_OF_COTATIONS_TO_SHOW..NUMBER_OF_COTATIONS_TO_SHOW).each do |i|
-          z_val = @tool.current_snapped_z_value + (i * SNAP_INCREMENT)
-          pt_on_axis = @tool.parent_origin.offset(@tool.parent_z_axis, z_val)
-          disp_cm = (z_val.to_cm == -0.0) ? 0.0 : z_val.to_cm
-          label = sprintf("%.1f cm", disp_cm)
-          view.draw_text(pt_on_axis.offset(text_offset), label)
-        end
-      end
-    end
-  end
-
-  class BacPlacerTool 
-    attr_reader :highlighted_component, :parent_origin, :parent_z_axis, 
-                  :snapped_insertion_point, :current_snapped_z_value
-    SNAP_INCREMENT = CotationOverlay::SNAP_INCREMENT
 
     def initialize
-      @bac_definition = nil; @highlighted_component = nil; @parent_origin = nil
-      @parent_z_axis = nil; @snapped_insertion_point = nil
-      @current_snapped_z_value = 0.0; @overlay = nil
+      @bac_definition = nil
+      @highlighted_component = nil
+      @parent_origin = nil
+      @parent_z_axis = nil
+      @snapped_insertion_point = nil
     end
 
     def activate
-      puts "Outil 'BacPlacerTool' (MAJ Enfant Seulement) activé."
+      puts "Outil 'BacPlacerTool' (Aperçu Fantôme + Clonage Attr.) activé."
       @model = Sketchup.active_model
-      # ... (réinitialisations) ...
-      @highlighted_component = nil; @parent_origin = nil; @parent_z_axis = nil
-      @snapped_insertion_point = nil; @current_snapped_z_value = 0.0
+      @highlighted_component = nil
+      @parent_origin = nil
+      @parent_z_axis = nil
+      @snapped_insertion_point = nil
+      
       begin
         @bac_definition = @model.definitions.load(PATH_TO_BAC_COMPONENT)
       rescue => e
-        UI.messagebox("Erreur chargement BAC: #{e.message}"); @model.select_tool(nil); return
+        UI.messagebox("Erreur: Impossible de charger le composant BAC.\n#{e.message}")
+        @model.select_tool(nil)
+        return
       end
-      if @overlay && @model.active_view.overlays.include?(@overlay)
-        @model.active_view.remove_overlay(@overlay) # Sécurité
-      end
-      @overlay = CotationOverlay.new(self)
-      @model.active_view.add_overlay(@overlay)
-      @model.active_view.invalidate 
-      Sketchup.set_status_text("Survolez parent, cliquez pour placer BAC sur axe Z.")
+      
+      Sketchup.set_status_text("Survolez un composant parent, cliquez pour placer le BAC.")
+      Sketchup.active_model.active_view.invalidate 
     end
     
     def deactivate(view)
-      if @overlay && view && view.overlays.include?(@overlay)
-        view.remove_overlay(@overlay); @overlay = nil; view.invalidate
-      end
+      view.invalidate if view
       Sketchup.set_status_text("")
     end
 
-    def onMouseMove(flags, x, y, view) # Logique de snapping
-      ph = view.pick_helper; ph.do_pick(x, y); picked = ph.best_picked
-      new_hl = picked ? (current = picked; until current.nil? || current.is_a?(Sketchup::ComponentInstance); current = current.parent; end; current.is_a?(Sketchup::ComponentInstance) ? current : nil) : nil
-      needs_redraw = false
-      if @highlighted_component != new_hl
-        @highlighted_component = new_hl
-        if @highlighted_component
-          pt = @highlighted_component.transformation; @parent_origin = pt.origin; @parent_z_axis = pt.zaxis.normalize
-        else
-          @parent_origin = nil; @parent_z_axis = nil
+    def onMouseMove(flags, x, y, view)
+      ph = view.pick_helper
+      ph.do_pick(x, y)
+      picked_entity = ph.best_picked
+      new_highlight = nil
+      if picked_entity
+        current = picked_entity
+        until current.nil? || current.is_a?(Sketchup::ComponentInstance)
+          current = current.parent
         end
-        @snapped_insertion_point = nil; @current_snapped_z_value = 0.0; needs_redraw = true
+        new_highlight = current if current.is_a?(Sketchup::ComponentInstance)
       end
-      old_snap_pt = @snapped_insertion_point
+
+      needs_invalidate = false
+      if @highlighted_component != new_highlight
+        @highlighted_component = new_highlight
+        if @highlighted_component
+          parent_transform = @highlighted_component.transformation
+          @parent_origin = parent_transform.origin
+          @parent_z_axis = parent_transform.zaxis.normalize
+        else
+          @parent_origin = nil
+          @parent_z_axis = nil
+        end
+        @snapped_insertion_point = nil 
+        needs_invalidate = true
+      end
+
+      old_snapped_point = @snapped_insertion_point
       if @highlighted_component && @parent_origin && @parent_z_axis
-        ip = view.inputpoint(x,y); unless ip.valid?; if @snapped_insertion_point; @snapped_insertion_point=nil; @current_snapped_z_value=0.0; needs_redraw=true; end; view.invalidate if needs_redraw; return; end
-        proj_pt = ip.position.project_to_line(@parent_origin, @parent_z_axis)
-        dist_z = (proj_pt - @parent_origin).dot(@parent_z_axis)
-        @current_snapped_z_value = (dist_z / SNAP_INCREMENT).round * SNAP_INCREMENT
-        @snapped_insertion_point = @parent_origin.offset(@parent_z_axis, @current_snapped_z_value)
-        needs_redraw = true if @snapped_insertion_point != old_snap_pt
+        mouse_ip = view.inputpoint(x, y)
+        if mouse_ip.valid?
+            mouse_point_3d = mouse_ip.position
+            projected_point_on_axis = mouse_point_3d.project_to_line(@parent_origin, @parent_z_axis)
+            vector_to_projection = projected_point_on_axis - @parent_origin
+            distance_along_z = vector_to_projection.dot(@parent_z_axis)
+            # Pas besoin de @current_snapped_z_value si on n'affiche pas les cotes textuelles
+            current_snapped_z_value = (distance_along_z / SNAP_INCREMENT).round * SNAP_INCREMENT
+            @snapped_insertion_point = @parent_origin.offset(@parent_z_axis, current_snapped_z_value)
+            needs_invalidate = true if @snapped_insertion_point != old_snapped_point
+        else
+            @snapped_insertion_point = nil 
+            needs_invalidate = true if old_snapped_point 
+        end
       else
-        if @snapped_insertion_point; @snapped_insertion_point=nil; @current_snapped_z_value=0.0; needs_redraw=true; end
+        if @snapped_insertion_point 
+          @snapped_insertion_point = nil
+          needs_invalidate = true
+        end
       end
-      view.invalidate if needs_redraw
+      if needs_invalidate
+        view.invalidate
+      end
     end
     
-    def draw(view); end # Géré par Overlay
+    def draw(view) # Dessin de l'aperçu fantôme
+      if @snapped_insertion_point && @bac_definition
+        preview_transform = Geom::Transformation.translation(@snapped_insertion_point)
+        bounds = @bac_definition.bounds
+        transformed_pts = Array.new(8) { |i| bounds.corner(i).transform(preview_transform) }
+        view.drawing_color = [180, 180, 180, 150]; view.line_width = 1; view.line_stipple = "-"
+        view.draw(GL_LINE_LOOP, transformed_pts[0], transformed_pts[1], transformed_pts[3], transformed_pts[2])
+        view.draw(GL_LINE_LOOP, transformed_pts[4], transformed_pts[5], transformed_pts[7], transformed_pts[6])
+        view.draw(GL_LINES, transformed_pts[0], transformed_pts[4], transformed_pts[1], transformed_pts[5], 
+                            transformed_pts[2], transformed_pts[6], transformed_pts[3], transformed_pts[7])
+      elsif @highlighted_component && @highlighted_component.valid?
+          bounds = @highlighted_component.bounds; view.drawing_color = "DodgerBlue"; view.line_width = 2; view.line_stipple = ""
+          pts = (0..7).map { |i| bounds.corner(i) }
+          view.draw(GL_LINE_LOOP, pts[0], pts[1], pts[3], pts[2]); view.draw(GL_LINE_LOOP, pts[4], pts[5], pts[7], pts[6])
+          view.draw(GL_LINES, pts[0], pts[4], pts[1], pts[5], pts[2], pts[6], pts[3], pts[7])
+      end
+    end
 
     def onLButtonDown(flags, x, y, view)
       if @highlighted_component && @snapped_insertion_point && @highlighted_component.valid?
-        ins_trans = Geom::Transformation.translation(@snapped_insertion_point)
-        UI.start_timer(0, false) { place_element_inside(@highlighted_component, ins_trans, @bac_definition) }
+        insertion_transform = Geom::Transformation.translation(@snapped_insertion_point)
+        UI.start_timer(0, false) { place_element_inside(@highlighted_component, insertion_transform, @bac_definition) }
         @model.select_tool(nil)
+      elsif @highlighted_component && @highlighted_component.valid? 
+        puts "Insertion à l'origine du parent (pas de point de snap actif)."
+        UI.start_timer(0, false) { place_element_inside(@highlighted_component, Geom::Transformation.new, @bac_definition) }
+        @model.select_tool(nil)
+      else
+        puts "Clic invalide."
       end
     end
         
@@ -132,43 +145,62 @@ module London2D::BacInserter
     
     private
     
+    # --- MÉTHODE D'INSERTION AVEC CLONAGE D'ATTRIBUTS + MAJ PARENT (Style BookInserter) ---
     def place_element_inside(parent_component, transformation_for_new_instance, element_definition_to_insert)
       model = parent_component.model
-      model.start_operation("Insérer BAC et MAJ Enfant", true)
-      new_element_instance = nil
+      model.start_operation("Insérer BAC et Mettre à Jour", true)
+      
       begin
+        # --- Étape 1 : Insertion ---
         target_entities = parent_component.definition.entities
         new_element_instance = target_entities.add_instance(element_definition_to_insert, transformation_for_new_instance)
-        puts "Étape 1 : BAC inséré au point snappé."
+        puts "Étape 1 : BAC inséré."
 
-        # --- Étape 2 : CLONAGE COMPLET DES ATTRIBUTS DE LA DÉFINITION VERS L'INSTANCE ---
+        # --- Étape 2 : CLONAGE COMPLET DES ATTRIBUTS DYNAMIQUES DE LA DÉFINITION VERS L'INSTANCE ---
         source_dc_dict = element_definition_to_insert.attribute_dictionary('dynamic_attributes')
         instance_dc_dict = new_element_instance.attribute_dictionary('dynamic_attributes', true) 
+
         if source_dc_dict && instance_dc_dict
           puts "Clonage des attributs de '#{element_definition_to_insert.name}' vers la nouvelle instance..."
-          source_dc_dict.each_pair { |k, v| new_element_instance.set_attribute('dynamic_attributes', k, v) }
+          source_dc_dict.each_pair do |key, value|
+            new_element_instance.set_attribute('dynamic_attributes', key, value)
+            # Décommentez pour un débogage très fin des valeurs clonées :
+            # puts "  -> Attribut '#{key}' cloné avec la valeur: #{value.inspect}"
+          end
           puts "Clonage des attributs terminé."
+        else
+          puts "AVERTISSEMENT: Impossible de cloner les attributs."
         end
         
-        # --- Étape 3 : MISE À JOUR DE LA NOUVELLE INSTANCE ENFANT UNIQUEMENT ---
-        if new_element_instance
-          puts "Étape 3 : Démarrage de la mise à jour sur la NOUVELLE INSTANCE BAC '#{new_element_instance.definition.name}'..."
-          force_dc_update(new_element_instance) # Met à jour l'enfant directement
-        end
+        # --- Étape 3 : Lancement de la mise à jour récursive sur le PARENT ---
+        puts "Étape 3 : Démarrage de la mise à jour récursive sur le PARENT '#{parent_component.definition.name}'..."
+        update_dynamically_recursively(parent_component)
 
       rescue => e
-        UI.messagebox("Erreur insertion/MAJ BAC:\n#{e.message}\n#{e.backtrace.first}"); model.abort_operation
+        UI.messagebox("Une erreur est survenue :\n#{e.message}\n#{e.backtrace.first}")
+        model.abort_operation
       else
-        model.commit_operation; puts "Opération BAC (MAJ Enfant) terminée."; model.active_view.refresh
+        model.commit_operation
+        puts "Opération BAC terminée avec succès."
+        model.active_view.refresh
+      end
+    end
+
+    def update_dynamically_recursively(instance)
+      force_dc_update(instance)
+      instance.definition.entities.grep(Sketchup::ComponentInstance).each do |child|
+        update_dynamically_recursively(child)
       end
     end
     
-    def force_dc_update(comp_instance) # Cette fonction ne fait pas de récursion
+    def force_dc_update(comp_instance)
       return unless comp_instance.attribute_dictionary('dynamic_attributes')
-      puts " -> Mise à jour ciblée de '#{comp_instance.definition.name}'"
+      puts " -> Mise à jour de '#{comp_instance.definition.name}'"
       if defined?($dc_observers) && $dc_observers.respond_to?(:get_latest_class) && $dc_observers.get_latest_class
+        puts "    -> via Eneroth DC Observers"
         $dc_observers.get_latest_class.redraw_with_undo(comp_instance)
       elsif defined?(Sketchup::DynamicComponents::Tools) && Sketchup::DynamicComponents::Tools.respond_to?(:update_attributes)
+        puts "    -> via Tools.update_attributes"
         Sketchup::DynamicComponents::Tools.update_attributes(comp_instance)
       end
       comp_instance.dynamic_attributes_updated if comp_instance.respond_to?(:dynamic_attributes_updated)
@@ -176,16 +208,20 @@ module London2D::BacInserter
   end
 
   class << self
-    def activate_bac_placer_tool; Sketchup.active_model.select_tool(BacPlacerTool.new); end
+    def activate_bac_placer_tool
+      Sketchup.active_model.select_tool(BacPlacerTool.new)
+    end
   end
 
   unless file_loaded?(__FILE__) 
-    cmd = UI::Command.new("Insérer BAC (SnapZ, MAJ Enfant)") { self.activate_bac_placer_tool }
-    cmd.small_icon = File.join(PATH_TO_RESOURCES, "bac.png")
-    cmd.large_icon = File.join(PATH_TO_RESOURCES, "bac.png")
-    cmd.tooltip = "Insérer un BAC (MAJ Enfant uniquement)"
-    tb = UI::Toolbar.new("London_2D"); tb.add_item(cmd); tb.restore
-    UI.menu("Plugins").add_item(cmd)
+    cmd_bac = UI::Command.new("Insérer BAC (Aperçu)") { self.activate_bac_placer_tool }
+    cmd_bac.small_icon = File.join(PATH_TO_RESOURCES, "bac.png")
+    cmd_bac.large_icon = File.join(PATH_TO_RESOURCES, "bac.png")
+    cmd_bac.tooltip = "Insérer un BAC avec aperçu (snap Z 2.5cm)"
+    toolbar = UI::Toolbar.new("London_2D")
+    toolbar.add_item(cmd_bac)
+    toolbar.restore
+    UI.menu("Plugins").add_item(cmd_bac)
     file_loaded(__FILE__)
   end
 end
