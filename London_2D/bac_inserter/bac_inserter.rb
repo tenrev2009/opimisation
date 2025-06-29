@@ -114,7 +114,7 @@ module London2D::BacInserter
         preview_transform = Geom::Transformation.translation(@snapped_insertion_point)
         bounds = @bac_definition.bounds
         transformed_pts = Array.new(8) { |i| bounds.corner(i).transform(preview_transform) }
-        view.drawing_color = [180, 180, 180, 150]; view.line_width = 1; view.line_stipple = "-"
+        view.drawing_color = [0, 255, 0, 255]; view.line_width = 2; view.line_stipple = ""
         view.draw(GL_LINE_LOOP, transformed_pts[0], transformed_pts[1], transformed_pts[3], transformed_pts[2])
         view.draw(GL_LINE_LOOP, transformed_pts[4], transformed_pts[5], transformed_pts[7], transformed_pts[6])
         view.draw(GL_LINES, transformed_pts[0], transformed_pts[4], transformed_pts[1], transformed_pts[5], 
