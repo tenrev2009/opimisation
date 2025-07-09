@@ -36,6 +36,9 @@ begin
   require File.join(PATH_TO_EXTENSION_ROOT, 'dynamic_3d',       'inject_3d.rb')
   require File.join(PATH_TO_EXTENSION_ROOT, 'book_inserter',    'book_inserter.rb')
   require File.join(PATH_TO_EXTENSION_ROOT, 'sub_component_deleter.rb') 
+  require File.join(PATH_TO_EXTENSION_ROOT, 'sub_component_mover.rb')
+  require File.join(PATH_TO_EXTENSION_ROOT, 'sub_component_duplicator.rb')
+  
   
   # Pour l'outil d'insertion de bacs (s'il est dans son propre sous-dossier de London_2D/)
   # Assurez-vous que le chemin est correct si vous l'avez créé.
