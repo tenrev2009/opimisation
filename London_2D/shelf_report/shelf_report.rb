@@ -1,85 +1,88 @@
+# shelf_report.rb
+# Plugin Rapport HTML + CSV pour London_2D (colonnes personnalisées)
+
 require 'sketchup.rb'
 require 'tempfile'
 
 module ShelfCalculatorReport
+
   DICT = "London_2D"
   PANEL_THICKNESS = 3.3
+  DEFAULT_BOOKS_PER_ML = 40
+  ALL_SHELF_SIZES = [100.5, 90, 75, 50].freeze
 
   def self.generate_html
     model = Sketchup.active_model
 
-    # Sélectionner tous les composants avec attributs London_2D
-    instances = model.definitions.flat_map(&:instances).select { |i|
-      i.get_attribute(DICT, "longueur_totale_cm")
-    }
+    instances = model.definitions
+                     .flat_map(&:instances)
+                     .select { |i| i.get_attribute(DICT, "longueur_totale_cm") }
 
     if instances.empty?
-      UI.messagebox("Aucun composant London_2D trouvé.")
+      UI.messagebox("Aucun composant London_2D trouvé.", MB_OK)
       return
     end
 
-    # 💬 Demander le nombre de livres par mètre linéaire
-    livres_par_metre = UI.inputbox(["Nombre de livres par mètre linéaire :"], [40], "Estimation de capacité")[0].to_f
-    livres_par_metre = 40 if livres_par_metre <= 0
-
+    # En-têtes avec colonnes supplémentaires
     headers = [
-      "Index", "Nom", "Longueur disponible (cm)", "Profondeur (cm)",
-      "Hauteur (cm)", "Nb tablettes verticales",
-      "Longueur réelle utilisée (cm)", "Espace restant (cm)",
-      "Métrage linéaire (m)"
-    ] + ShelfCalculator::ALL_SHELF_SIZES.map { |s| "#{s.to_i} cm" }
+      "Index", "Nom", "Profondeur (cm)", "Longueur réelle utilisée (cm)",
+      "Nb tablettes", "Linéaire (ml)", "Livres/ml", "Total livres"
+    ] + ALL_SHELF_SIZES.map { |s| "#{s.to_i} cm" }
 
     rows = []
-    total_ml = 0.0
 
-    instances.each_with_index do |instance, idx|
-      name = instance.name
-      total = instance.get_attribute(DICT, "longueur_totale_cm").to_f
-      profondeur = instance.get_attribute(DICT, "profondeur_cm").to_f
-      hauteur = instance.get_attribute(DICT, "hauteur_cm").to_f
-      nb_tablettes_vert = instance.get_attribute(DICT, "nb_tablettes_hauteur").to_i
+    instances.each_with_index do |inst, idx|
+      name       = inst.name.empty? ? "London_2D_#{idx+1}" : inst.name
+      profondeur = inst.get_attribute(DICT, "profondeur_cm").to_f
 
-
+      # Comptage par taille
       counts = {}
-      longueur_etalage = 0.0
-      ShelfCalculator::ALL_SHELF_SIZES.each do |size|
+      used_length_per_level = 0.0
+      ALL_SHELF_SIZES.each do |size|
         key = "etagere_#{size.to_i}_cm"
-        count = instance.get_attribute(DICT, key).to_i
-        counts[size] = count
-        longueur_etalage += count * size
+        cnt = inst.get_attribute(DICT, key).to_i
+        counts[size] = cnt
+        used_length_per_level += cnt * size
       end
 
-      longueur_reelle = (longueur_etalage + 2 * PANEL_THICKNESS).round(2)
-      restant = (total - longueur_reelle).round(2)
-      ml = ((longueur_etalage * nb_tablettes_vert) / 100.0).round(2)
-      total_ml += ml
+      # Calcul longueur réelle utilisée (y compris panneaux)
+      real_length = (used_length_per_level + 2 * PANEL_THICKNESS).round(2)
 
+      # Nombre de tablettes verticales
+      nb_tablettes = inst.get_attribute(DICT, "nb_tablettes_hauteur").to_i
+
+      # Linéaire total = longueur par niveau * nombre de niveaux (en ml)
+      total_linear_cm = used_length_per_level * nb_tablettes
+      linear_ml = (total_linear_cm / 100.0).round(2)
+
+      # Nombre de livres par ml et total livres
+      books_per_ml = DEFAULT_BOOKS_PER_ML
+      total_books = (linear_ml * books_per_ml).round(2)
+
+      # Construire la ligne
       row = [
-        idx + 1,
+        idx+1,
         name,
-        total.round(2),
         profondeur.round(2),
-        hauteur.round(2),
-        nb_tablettes_vert,
-        longueur_reelle,
-        restant,
-        ml
-      ] + ShelfCalculator::ALL_SHELF_SIZES.map { |s| counts[s] }
+        real_length,
+        nb_tablettes,
+        linear_ml,
+        books_per_ml,
+        total_books
+      ] + ALL_SHELF_SIZES.map { |s| counts[s] }
 
       rows << row
     end
 
-    estimation_livres = (total_ml * livres_par_metre).to_i
-
-    html = build_html(headers, rows, livres_par_metre, total_ml, estimation_livres)
+    html = build_html(headers, rows)
     file = Tempfile.new(['rapport_london2d', '.html'])
     file.write(html)
     file.close
     UI.openURL("file:///" + file.path.gsub("\\", "/"))
   end
 
-  def self.build_html(headers, rows, livres_par_metre, total_ml, estimation_total_livres)
-    csv_data = ([headers] + rows).map { |row| row.join(",") }.join("\n")
+  def self.build_html(headers, rows)
+    csv_data = ([headers] + rows).map { |r| r.join(",") }.join("\n")
 
     <<~HTML
       <!DOCTYPE html>
@@ -101,27 +104,14 @@ module ShelfCalculatorReport
       <body>
         <h1>Rapport des étagères London_2D</h1>
         <a class="btn" href="#" onclick="exportCSV()">📄 Exporter en CSV</a>
-
         <table>
           <thead>
             <tr>#{headers.map { |h| "<th>#{h}</th>" }.join}</tr>
           </thead>
           <tbody>
-            #{rows.map { |row| "<tr>#{row.map { |cell| "<td>#{cell}</td>" }.join}</tr>" }.join}
+            #{rows.map { |r| "<tr>#{r.map { |c| "<td>#{c}</td>" }.join}</tr>" }.join}
           </tbody>
-          <tfoot>
-            <tr><td colspan="#{headers.size}" style="text-align: right; font-weight: bold;">
-              📚 Livres / mètre linéaire utilisé : #{livres_par_metre}
-            </td></tr>
-            <tr><td colspan="#{headers.size}" style="text-align: right; font-weight: bold;">
-              📏 Total linéaire utilisé : #{total_ml.round(2)} m
-            </td></tr>
-            <tr><td colspan="#{headers.size}" style="text-align: right; font-weight: bold;">
-              📘 Estimation totale de livres : #{estimation_total_livres}
-            </td></tr>
-          </tfoot>
         </table>
-
         <script>
           function exportCSV() {
             const csvContent = #{csv_data.inspect};
@@ -143,21 +133,18 @@ module ShelfCalculatorReport
   unless file_loaded?(__FILE__)
     icon_path = File.join(__dir__, "icons", "london_report.png")
 
-    cmd = UI::Command.new("Rapport London_2D") {
-      self.generate_html
-    }
-    cmd.tooltip = "Rapport London_2D"
-    cmd.status_bar_text = "Afficher un rapport HTML des composants London_2D"
-    cmd.large_icon = icon_path
-    cmd.small_icon = icon_path
+    cmd = UI::Command.new("Rapport London_2D") { generate_html }
+    cmd.tooltip         = "Afficher le rapport HTML London_2D"
+    cmd.status_bar_text = "Génère un rapport des composants London_2D"
+    cmd.large_icon      = icon_path
+    cmd.small_icon      = icon_path
 
     toolbar = UI::Toolbar.new("London_2D")
     toolbar.add_item(cmd)
     toolbar.restore
 
-    UI.menu("Plugins").add_item("Rapport HTML London_2D") {
-      self.generate_html
-    }
+    UI.menu("Plugins").add_submenu("London_2D")
+      .add_item("Rapport HTML London_2D") { generate_html }
 
     file_loaded(__FILE__)
   end

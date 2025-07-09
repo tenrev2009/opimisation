@@ -1,0 +1,157 @@
+# --- QuickDeleterTool (Version finale avec intégration UI London_2D) ---
+require 'sketchup.rb'
+
+begin
+  require 'sketchup-dynamic-components/ruby/dcfunctions.rb'
+rescue LoadError
+end
+
+module London2D
+  # Définition des chemins pour les ressources, comme dans vos autres scripts
+  PLUGIN_DIR = File.dirname(__FILE__)
+  PATH_TO_RESOURCES = File.join(PLUGIN_DIR, 'icons')
+
+  class QuickDeleteTool
+
+    def activate
+      @model = Sketchup.active_model
+      @highlight = nil
+      @transform = nil # Transformation mondiale pour le dessin
+      update_status_text
+      @model.active_view.invalidate
+    end
+
+    def deactivate(view)
+      view.invalidate if view
+      Sketchup.set_status_text("")
+    end
+
+    def onMouseMove(flags, x, y, view)
+      update_status_text
+      
+      active_path = @model.active_path
+      unless active_path
+        if @highlight
+          @highlight = nil
+          view.invalidate
+        end
+        return
+      end
+
+      ph = view.pick_helper
+      ph.do_pick(x, y)
+      
+      new_highlight = nil
+      
+      picked_path = ph.path_at(0)
+
+      if picked_path && !picked_path.empty?
+        candidate = picked_path.first
+        
+        if candidate.is_a?(Sketchup::ComponentInstance) && candidate.parent == active_path.last.definition
+          new_highlight = candidate
+        end
+      end
+
+      if @highlight != new_highlight
+        @highlight = new_highlight
+        
+        if @highlight
+          @transform = @model.edit_transform * @highlight.transformation
+        else
+          @transform = nil
+        end
+        view.invalidate
+      end
+    end
+
+    def draw(view)
+      if @highlight && @transform
+        bounds = @highlight.definition.bounds
+        
+        pts = (0..7).map { |i| bounds.corner(i).transform(@transform) }
+        
+        view.drawing_color = 'red'
+        view.line_width = 2
+        view.line_stipple = ""
+        
+        view.draw(GL_LINE_LOOP, pts[0], pts[1], pts[3], pts[2])
+        view.draw(GL_LINE_LOOP, pts[4], pts[5], pts[7], pts[6])
+        view.draw(GL_LINES, pts[0], pts[4], pts[1], pts[5], pts[2], pts[6], pts[3], pts[7])
+      end
+    end
+
+    def onLButtonDown(flags, x, y, view)
+      return unless @highlight && @model.active_path
+
+      parent_to_update = @model.active_path.last
+      
+      @model.start_operation('Supprimer Enfant Direct', true)
+      @highlight.erase!
+      force_dc_update(parent_to_update) if parent_to_update && parent_to_update.valid?
+      @model.commit_operation
+      
+      @highlight = nil
+      @transform = nil
+      view.invalidate
+    end
+
+    # --- Fonctions de support ---
+
+    def onCancel(reason, view)
+      @model.select_tool(nil)
+    end
+
+    def onActivePathChanged(view)
+      @highlight = nil
+      update_status_text
+      view.invalidate
+    end
+
+    def update_status_text
+      if @model.active_path.nil?
+        Sketchup.set_status_text("ACTION REQUISE : Double-cliquez sur un composant pour l'éditer.")
+      else
+        Sketchup.set_status_text("Prêt. Survolez un enfant direct (composant) pour le supprimer.")
+      end
+    end
+
+    def force_dc_update(comp_instance)
+      return unless comp_instance.is_a?(Sketchup::ComponentInstance) && comp_instance.attribute_dictionary('dynamic_attributes')
+      
+      if defined?($dc_observers) && $dc_observers.respond_to?(:get_latest_class) && $dc_observers.get_latest_class
+        $dc_observers.get_latest_class.redraw_with_undo(comp_instance)
+      elsif defined?(Sketchup::DynamicComponents::Tools) && Sketchup::DynamicComponents::Tools.respond_to?(:update_attributes)
+        Sketchup::DynamicComponents::Tools.update_attributes(comp_instance)
+      end
+    end
+  end
+
+  # --- Code pour lancer l'outil et l'intégrer à l'UI ---
+
+  class << self
+    def activate_quick_delete_tool
+      Sketchup.active_model.select_tool(QuickDeleteTool.new)
+    end
+  end
+
+  unless file_loaded?(__FILE__)
+    cmd = UI::Command.new("Supprimer Enfant Direct") { self.activate_quick_delete_tool }
+    cmd.tooltip = "Supprime un enfant direct en mode édition (composant uniquement)"
+    cmd.small_icon = File.join(PATH_TO_RESOURCES, "delete_sub.png")
+    cmd.large_icon = File.join(PATH_TO_RESOURCES, "delete_sub.png")
+    
+    # Ajout à la barre d'outils "London_2D"
+    toolbar = UI::Toolbar.new("London_2D")
+    toolbar.add_item(cmd)
+    toolbar.restore
+    
+    # Ajout au menu Plugins
+    UI.menu("Plugins").add_item(cmd)
+    
+    file_loaded(__FILE__)
+  end
+end
+
+
+

@@ -96,8 +96,6 @@ module London2D
         comp3d = model.active_entities.add_instance(@definition, transform)
 
         # Injection des attributs dynamiques DANS LE COMPOSANT PARENT (comp3d)
-        # C'est le composant parent qui est responsable de lire ces attributs
-        # et de gérer la génération/configuration de ses propres sous-composants.
         da = "dynamic_attributes"
         comp3d.set_attribute(da, "nb_100",     @shelf_counts[100])
         comp3d.set_attribute(da, "nb_90",      @shelf_counts[90])
@@ -105,27 +103,38 @@ module London2D
         comp3d.set_attribute(da, "nb_50",      @shelf_counts[50])
         comp3d.set_attribute(da, "nb_tablette",@nb_tablette)
         comp3d.set_attribute(da, "hauteur",    @hauteur_pouces)
+        
+        # *** DEBUT DE LA LOGIQUE DE MISE À JOUR EXACTEMENT COMME DANS TON SCRIPT FONCTIONNEL ***
 
-        # Mise à jour automatique du Composant Dynamique parent
-        # Cette ligne est importante pour le composant principal lui-même
-        if defined?(Sketchup::DynamicComponents::Tools)
-          Sketchup::DynamicComponents::Tools.update_attributes(comp3d)
-        end
-        comp3d.dynamic_attributes_updated if comp3d.respond_to?(:dynamic_attributes_updated)
-
-        model.commit_operation # Valide l'opération avant de tenter le redessin global
-        model.active_view.refresh # Rafraîchit la vue, utile mais ne remplace pas le DC redraw
-
-        UI.messagebox("Insertion 3D terminée et composant mis à jour.", MB_OK)
-
-        # *** LIGNE CLÉ DE LA NOUVELLE SOLUTION : Décaler le redessin ***
-        # Cela permet à SketchUp de terminer l'insertion et la consolidation de l'opération
-        # avant que le rafraîchissement des DCs ne soit demandé.
-        if defined?(Sketchup::DynamicComponents::Tools)
-          UI.start_timer(0.1, false) do # 0.1 secondes de délai (ou même 0.01 suffit parfois), non répétitif
-            Sketchup::DynamicComponents::Tools.redraw_all_d_c_instances
+        # 1. Déclencher le redessin du composant PARENT
+        # C'est cette méthode spécifique qui, selon toi, fonctionne et doit être appelée en premier pour le DC.
+        if defined?($dc_observers) && $dc_observers.get_latest_class
+          $dc_observers.get_latest_class.redraw_with_undo(comp3d)
+        else
+          # Fallback si l'extension DC n'est pas active ou $dc_observers non défini
+          UI.messagebox("L'extension Dynamic Components n'est pas active ou non initialisée. Le composant pourrait ne pas se mettre à jour automatiquement.", UI::WARNING)
+          # Tentative avec l'API standard comme fallback si le module $dc_observers n'est pas disponible
+          if defined?(Sketchup::DynamicComponents::Tools)
+            Sketchup::DynamicComponents::Tools.update_attributes(comp3d)
+            # Pas de redraw_all_d_c_instances ici, car la stratégie est différente.
           end
         end
+        # Cette ligne est souvent redondante si les méthodes ci-dessus sont appelées
+        comp3d.dynamic_attributes_updated if comp3d.respond_to?(:dynamic_attributes_updated)
+
+        # 2. Propagation aux enfants dynamiques
+        # Ceci est appelé APRÈS le redraw_with_undo du parent, comme dans ton script fonctionnel.
+        # Cela modifie les attributs des *définitions* des enfants,
+        # sans les redessiner individuellement ici.
+        London2D::Dynamic3D.update_children_dynamic(
+          comp3d, @shelf_counts, @nb_tablette, @hauteur_pouces
+        )
+
+        # *** FIN DE LA LOGIQUE DE MISE À JOUR ***
+
+        model.commit_operation # Le commit est fait APRES les appels de mise à jour, comme dans ton script
+        model.active_view.refresh
+        UI.messagebox("Insertion 3D terminée et composant mis à jour.", MB_OK)
 
         Sketchup.active_model.tools.pop_tool
       end
@@ -170,30 +179,29 @@ module London2D
 
     # -------------------------------------------------------------------
     # Mise à jour des enfants dynamiques
-    # -> Cette fonction est commentée/supprimée car on part de l'hypothèse
-    #    que les enfants héritent leurs attributs du parent et sont gérés
-    #    par le script OnRedraw du parent.
+    # Cette fonction met à jour les ATTRIBUTS des *définitions* des sous-composants.
+    # Elle ne contient PAS d'appels à redraw_with_undo pour les enfants,
+    # comme dans ton script fonctionnel.
     # -------------------------------------------------------------------
-    # def self.update_children_dynamic(comp3d, shelf_counts, nb_tablette, hauteur_pouces)
-    #   comp3d.definition.entities.grep(Sketchup::ComponentInstance).each do |child|
-    #     next unless child.attribute_dictionaries&.key?("dynamic_attributes")
-    #     da = "dynamic_attributes"
-    #     child.set_attribute(da, "nb_100",     shelf_counts[100])
-    #     child.set_attribute(da, "nb_90",      shelf_counts[90])
-    #     child.set_attribute(da, "nb_75",      shelf_counts[75])
-    #     child.set_attribute(da, "nb_50",      shelf_counts[50])
-    #     child.set_attribute(da, "nb_tablette",nb_tablette)
-    #     child.set_attribute(da, "hauteur",    hauteur_pouces)
-    #     if defined?(Sketchup::DynamicComponents::Tools)
-    #       Sketchup::DynamicComponents::Tools.update_attributes(child)
-    #     end
-    #     child.dynamic_attributes_updated if child.respond_to?(:dynamic_attributes_updated)
-    #   end
-    # end
+    def self.update_children_dynamic(comp3d, shelf_counts, nb_tablette, hauteur_pouces)
+      return unless comp3d && comp3d.definition && comp3d.definition.entities
+
+      comp3d.definition.entities.grep(Sketchup::ComponentInstance).each do |child|
+        if child.attribute_dictionaries && child.attribute_dictionaries.key?("dynamic_attributes")
+          child.set_attribute("dynamic_attributes", "nb_100", shelf_counts[100])
+          child.set_attribute("dynamic_attributes", "nb_90",  shelf_counts[90])
+          child.set_attribute("dynamic_attributes", "nb_75",  shelf_counts[75])
+          child.set_attribute("dynamic_attributes", "nb_50",  shelf_counts[50])
+          child.set_attribute("dynamic_attributes", "nb_tablette", nb_tablette)
+          child.set_attribute("dynamic_attributes", "hauteur", hauteur_pouces) 
+        end
+      end
+    end
 
 
     # -------------------------------------------------------------------
     # Intégration dans l’UI : toolbar + menu Plugins
+    # Ces parties sont laissées intactes par rapport à ton script original.
     # -------------------------------------------------------------------
     unless file_loaded?(__FILE__)
       icon = File.join(__dir__, "icons", "london_3d.png")
@@ -217,6 +225,3 @@ module London2D
 
   end
 end
-
-
-
