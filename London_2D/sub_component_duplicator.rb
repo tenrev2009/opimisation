@@ -8,7 +8,7 @@ require 'extensions.rb'
 module London_2D
   PLUGIN_ID   = 'London_2D.quick_duplicate_sub'
   PARENT_NAME = 'Rayonnage'
-  CHILD_REGEX = /bac|tab/i
+  CHILD_REGEX = /bac|tab|tablette/i
 
   unless file_loaded?(PLUGIN_ID)
     class QuickDuplicateSubTool

@@ -23,10 +23,17 @@ module ShelfCalculatorReport
       return
     end
 
-    # En-têtes avec colonnes supplémentaires
+    # En-têtes avec nouvelle colonne Hauteur (cm)
     headers = [
-      "Index", "Nom", "Profondeur (cm)", "Longueur réelle utilisée (cm)",
-      "Nb tablettes", "Linéaire (ml)", "Livres/ml", "Total livres"
+      "Index",
+      "Nom",
+      "Profondeur (cm)",
+      "Hauteur (cm)",                      # ← ajout
+      "Longueur réelle utilisée (cm)",
+      "Nb tablettes",
+      "Linéaire (ml)",
+      "Livres/ml",
+      "Total livres"
     ] + ALL_SHELF_SIZES.map { |s| "#{s.to_i} cm" }
 
     rows = []
@@ -34,6 +41,8 @@ module ShelfCalculatorReport
     instances.each_with_index do |inst, idx|
       name       = inst.name.empty? ? "London_2D_#{idx+1}" : inst.name
       profondeur = inst.get_attribute(DICT, "profondeur_cm").to_f
+      hauteur    = inst.get_attribute(DICT, "hauteur_cm").to_f          # ← lecture
+      nb_tablettes = inst.get_attribute(DICT, "nb_tablettes_hauteur").to_i
 
       # Comptage par taille
       counts = {}
@@ -45,25 +54,22 @@ module ShelfCalculatorReport
         used_length_per_level += cnt * size
       end
 
-      # Calcul longueur réelle utilisée (y compris panneaux)
+      # Longueur réelle utilisée (y compris montants)
       real_length = (used_length_per_level + 2 * PANEL_THICKNESS).round(2)
 
-      # Nombre de tablettes verticales
-      nb_tablettes = inst.get_attribute(DICT, "nb_tablettes_hauteur").to_i
-
-      # Linéaire total = longueur par niveau * nombre de niveaux (en ml)
+      # Calcul linéaire total (en ml)
       total_linear_cm = used_length_per_level * nb_tablettes
-      linear_ml = (total_linear_cm / 100.0).round(2)
+      linear_ml       = (total_linear_cm / 100.0).round(2)
 
-      # Nombre de livres par ml et total livres
+      # Livres
       books_per_ml = DEFAULT_BOOKS_PER_ML
-      total_books = (linear_ml * books_per_ml).round(2)
+      total_books  = (linear_ml * books_per_ml).round(2)
 
-      # Construire la ligne
       row = [
-        idx+1,
+        idx + 1,
         name,
         profondeur.round(2),
+        hauteur.round(2),                   # ← insertion
         real_length,
         nb_tablettes,
         linear_ml,
@@ -82,6 +88,7 @@ module ShelfCalculatorReport
   end
 
   def self.build_html(headers, rows)
+    # Préparer le CSV (pour export)
     csv_data = ([headers] + rows).map { |r| r.join(",") }.join("\n")
 
     <<~HTML
@@ -148,4 +155,5 @@ module ShelfCalculatorReport
 
     file_loaded(__FILE__)
   end
+
 end

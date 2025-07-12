@@ -19,7 +19,7 @@ module London2D::BacInserter
   
   # --- Chemins des composants ---
   PATH_TO_BAC_COMPONENT = File.join(PATH_TO_COMPONENTS, '04-BACS.skp')
-  
+  PATH_TO_BAC_DF_COMPONENT = File.join(PATH_TO_COMPONENTS, 'BACS-df.skp')
   ### NOUVEAU : Définissez les chemins vers vos autres composants ici ###
   # !!! VÉRIFIEZ BIEN QUE CES NOMS DE FICHIERS SONT CORRECTS !!!
   PATH_TO_TABLETTE_COMPONENT = File.join(PATH_TO_COMPONENTS, 'TABLETTE.skp') 
@@ -222,7 +222,7 @@ module London2D::BacInserter
       # Crée une boîte de dialogue avec une liste déroulante
       prompts = ["Type d'élément à insérer :"]
       defaults = ["Bac"]
-      list_options = "Bac|Tablette|Tablette Inclinée"
+      list_options = "Bac|BACS-df|Tablette|Tablette Inclinée"
       
       # Affiche la boîte de dialogue
       results = UI.inputbox(prompts, defaults, [list_options], "Choisir un composant à insérer")
@@ -236,6 +236,8 @@ module London2D::BacInserter
       component_path = case user_choice
                        when "Bac"
                          PATH_TO_BAC_COMPONENT
+					   when "BACS-df"
+                         PATH_TO_BAC_DF_COMPONENT
                        when "Tablette"
                          PATH_TO_TABLETTE_COMPONENT
                        when "Tablette Inclinée"
