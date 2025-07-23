@@ -1,14 +1,17 @@
 # Quick Duplicate Sub-Components Plugin for SketchUp
 # sub_component_duplicator.rb
-# Version 10.3 – idem 10.0 + redraw DC automatique après copie
+# Version 10.4 – Ajout de plusieurs options pour Rayonnage et Rayonnage df (parent)
+#                et pour bac|tab|tablette|bac_df|multi_composant (child)
 
 require 'sketchup.rb'
 require 'extensions.rb'
 
 module London_2D
   PLUGIN_ID   = 'London_2D.quick_duplicate_sub'
-  PARENT_NAME = 'Rayonnage'
-  CHILD_REGEX = /bac|tab|tablette/i
+  # PLUSIEURS OPTIONS DE PARENT : Rayonnage ET Rayonnage df
+  PARENT_NAME = ['Rayonnage', 'Rayonnage df']
+  # PLUSIEURS OPTIONS DE CHILD : bac, tab, tablette, bac_df, multi_composant
+  CHILD_REGEX = /bac|tab|tablette|bac_df|multi_composant/i
 
   unless file_loaded?(PLUGIN_ID)
     class QuickDuplicateSubTool
@@ -33,9 +36,10 @@ module London_2D
         ph.do_pick(x, y, 10)
         path = ph.path_at(0) || []
 
+        # Recherche d’un composant parent dont le nom figure dans PARENT_NAME
         parent_idx = path.index { |e|
           e.is_a?(Sketchup::ComponentInstance) &&
-          e.definition.name == PARENT_NAME
+            PARENT_NAME.include?(e.definition.name)
         }
 
         if parent_idx
@@ -101,46 +105,43 @@ module London_2D
             old_dict.each_pair { |k, v| new_dict[k] = v }
           end
 
+          # Décalage de 32,5 cm sur Z
           new_inst.transform!(Geom::Transformation.translation([0, 0, 32.5.cm]))
           model.commit_operation
         rescue => e
           model.abort_operation
           UI.messagebox("Erreur lors de la duplication : #{e.message}")
         ensure
-          # 1) rafraîchir la vue
           view.invalidate
           view.refresh
-          # 2) redraw DC sur la nouvelle instance (si DC)
           redraw_dynamic(@last_new_inst)
         end
       end
 
       private
 
-      # Copie de la logique dc_redraw_tool.rb pour forcer le redraw
+      # Forcer le redraw du composant dynamique
       def redraw_dynamic(comp_instance)
         return unless comp_instance.is_a?(Sketchup::ComponentInstance)
         return unless comp_instance.attribute_dictionary('dynamic_attributes')
 
-        # Eneroth DC Observers
         if defined?($dc_observers) && $dc_observers.respond_to?(:get_latest_class) &&
            $dc_observers.get_latest_class
           $dc_observers.get_latest_class.redraw_with_undo(comp_instance)
-        # SketchUp Dynamic Components Tools
         elsif defined?(Sketchup::DynamicComponents::Tools) &&
               Sketchup::DynamicComponents::Tools.respond_to?(:update_attributes)
           Sketchup::DynamicComponents::Tools.update_attributes(comp_instance)
-        # Fallback standard
         elsif defined?($dc_functions) && $dc_functions.respond_to?(:redraw)
           $dc_functions.redraw(comp_instance)
         end
 
         comp_instance.dynamic_attributes_updated if comp_instance.respond_to?(:dynamic_attributes_updated)
-      rescue => _ # ne jamais interrompre le flow en cas d’erreur
+      rescue
+        # Ne pas interrompre le workflow en cas d’erreur
       end
     end
 
-    # Barre d’outils et commande
+    # Création de la commande et de la barre d’outils
     cmd = UI::Command.new('Duplication Bac/Tab') {
       Sketchup.active_model.select_tool(QuickDuplicateSubTool.new)
     }
@@ -161,11 +162,3 @@ module London_2D
     file_loaded(PLUGIN_ID)
   end
 end
-
-
-
-
-
-
-
-

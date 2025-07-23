@@ -23,7 +23,8 @@ module London2D::BacInserter
   ### NOUVEAU : Définissez les chemins vers vos autres composants ici ###
   # !!! VÉRIFIEZ BIEN QUE CES NOMS DE FICHIERS SONT CORRECTS !!!
   PATH_TO_TABLETTE_COMPONENT = File.join(PATH_TO_COMPONENTS, 'TABLETTE.skp') 
-  PATH_TO_TABLETTE_INCLINEE_COMPONENT = File.join(PATH_TO_COMPONENTS, 'TABLETTE-INCLINEE.skp') 
+  PATH_TO_TABLETTE_INCLINEE_COMPONENT = File.join(PATH_TO_COMPONENTS, 'TABLETTE-INCLINEE.skp')
+  PATH_TO_MULTI_COMPOSANT_COMPONENT = File.join(PATH_TO_COMPONENTS, 'MULTI-COMPOSANT.skp')   
 
   # La logique de l'outil reste la même, il est juste rendu plus générique.
   # Le nom "BacPlacerTool" est conservé comme demandé.
@@ -222,7 +223,7 @@ module London2D::BacInserter
       # Crée une boîte de dialogue avec une liste déroulante
       prompts = ["Type d'élément à insérer :"]
       defaults = ["Bac"]
-      list_options = "Bac|BACS-df|Tablette|Tablette Inclinée"
+      list_options = "Bac|BACS-df|Tablette|Tablette Inclinée|Multi composant"
       
       # Affiche la boîte de dialogue
       results = UI.inputbox(prompts, defaults, [list_options], "Choisir un composant à insérer")
@@ -242,6 +243,8 @@ module London2D::BacInserter
                          PATH_TO_TABLETTE_COMPONENT
                        when "Tablette Inclinée"
                          PATH_TO_TABLETTE_INCLINEE_COMPONENT
+					  when "Multi composant"
+                         PATH_TO_MULTI_COMPOSANT_COMPONENT
                        else
                          UI.messagebox("Choix non reconnu.")
                          return
